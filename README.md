@@ -1,5 +1,5 @@
-!git clone https://github.com/inQuitiVe/YOLOv5_SD4Quant.git  # clone
-%cd YOLOv5_SD4Quant
+!git clone https://github.com/inQuitiVe/YOLOv5_SD4Quant.git  # clone \\
+%cd YOLOv5_SD4Quant \\
 !pip install -qr requirements.txt
 !pip install torchsummary
 !conda install -c 3dhubs gcc-5
