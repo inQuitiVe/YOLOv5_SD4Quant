@@ -175,9 +175,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
     optimizer.add_param_group({'params': g2})  # add g2 (biases)
 
 
-    a = open('./c.txt','w')
-    print(optimizer.param_groups,file=a)
-    a.close()
+    
 
     LOGGER.info(f"{colorstr('optimizer:')} {type(optimizer).__name__} with parameter groups "
                 f"{len(g0)} weight (no decay), {len(g1)} weight, {len(g2)} bias")
@@ -360,8 +358,6 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
                 mem = f'{torch.cuda.memory_reserved() / 1E9 if torch.cuda.is_available() else 0:.3g}G'  # (GB)
                 pbar.set_description(('%10s' * 2 + '%10.4g' * 5) % (
                     f'{epoch}/{epochs - 1}', mem, *mloss, targets.shape[0], imgs.shape[-1]))
-                print(imgs.dtype)
-                print(targets.dtype)
                 callbacks.run('on_train_batch_end', ni, model, imgs, targets, paths, plots, opt.sync_bn)
                 if callbacks.stop_training:
                     return
