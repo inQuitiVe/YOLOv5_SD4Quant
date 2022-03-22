@@ -246,7 +246,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
 
         # EMA
         if ema and ckpt.get('ema'):
-            ema.ema.load_state_dict(ckpt['ema'].float().state_dict())
+            ema.ema.load_state_dict(ckpt['ema'])
             ema.updates = ckpt['updates']
 
         # Epochs
