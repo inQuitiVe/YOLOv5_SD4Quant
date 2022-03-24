@@ -190,7 +190,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
                               weight_structure=[3,4],
                               weight_offset=8,
                               fp32_mastercopy=True, 
-                              channel_wise=False,
+                              channel_wise=True,
                               #kargs
                               lr=hyp['lr0'],
                               betas=(hyp['momentum'], 0.999),
@@ -212,7 +212,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
                               weight_structure=[3,4],
                               weight_offset=8,
                               fp32_mastercopy=True, 
-                              channel_wise=False,
+                              channel_wise=True,
                               #kargs
                               lr=hyp['lr0'],
                               momentum=hyp['momentum'],

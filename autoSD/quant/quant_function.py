@@ -56,7 +56,7 @@ def quantizer(forward_rounding="identity", backward_rounding="identity",
     elif (forward_rounding == "floatsd4_ex"): #floatsd4_ex (15 possible value)
         if (channel_wise):
             fwd_message = '  Forward: floatsd4_ex channel-wise dynamic quantizer'
-            forward_quant = lambda x, bias: quant_cuda.float_quantize_floatsd4_ex_cwise_dynamic(x, bias)
+            forward_quant = lambda x, bias: quant_cuda.float_quantize_floatsd4_ex_cwise_dynamic(x, torch.Tensor(bias).type(torch.IntTensor).to('cuda:0')))
         else:
             fwd_message = '  Forward: floatsd4_ex dynamic quantizer'
             forward_quant = lambda x, bias: quant_cuda.float_quantize_floatsd4_ex_dynamic(x, bias)
