@@ -443,8 +443,8 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
             if (not nosave) or (final_epoch and not evolve):  # if save
                 ckpt = {'epoch': epoch,
                         'best_fitness': best_fitness,
-                        'model': deepcopy(de_parallel(model)).half().state_dict(),                  # model.state_dict()為淺拷貝，deepcopy()為深拷貝，model.load_state_dict() 是深拷貝
-                        'ema': deepcopy(ema.ema).half().state_dict(),
+                        'model': deepcopy(de_parallel(model)).state_dict(),                  # model.state_dict()為淺拷貝，deepcopy()為深拷貝，model.load_state_dict() 是深拷貝
+                        'ema': deepcopy(ema.ema).state_dict(),
                         'updates': ema.updates,
                         'optimizer': optimizer.state_dict(),                       # state_dict()僅保存和加載模型參數(需先構建好model再.load_dict))
                         'wandb_id': loggers.wandb.wandb_run.id if loggers.wandb else None,
