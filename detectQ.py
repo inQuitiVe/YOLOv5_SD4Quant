@@ -1,29 +1,3 @@
-# YOLOv5 🚀 by Ultralytics, GPL-3.0 license
-"""
-Run inference on images, videos, directories, streams, etc.
-
-Usage - sources:
-    $ python path/to/detect.py --weights yolov5s.pt --source 0              # webcam
-                                                             img.jpg        # image
-                                                             vid.mp4        # video
-                                                             path/          # directory
-                                                             path/*.jpg     # glob
-                                                             'https://youtu.be/Zgi9g1ksQHc'  # YouTube
-                                                             'rtsp://example.com/media.mp4'  # RTSP, RTMP, HTTP stream
-
-Usage - formats:
-    $ python path/to/detect.py --weights yolov5s.pt                 # PyTorch
-                                         yolov5s.torchscript        # TorchScript
-                                         yolov5s.onnx               # ONNX Runtime or OpenCV DNN with --dnn
-                                         yolov5s.xml                # OpenVINO
-                                         yolov5s.engine             # TensorRT
-                                         yolov5s.mlmodel            # CoreML (MacOS-only)
-                                         yolov5s_saved_model        # TensorFlow SavedModel
-                                         yolov5s.pb                 # TensorFlow GraphDef
-                                         yolov5s.tflite             # TensorFlow Lite
-                                         yolov5s_edgetpu.tflite     # TensorFlow Edge TPU
-"""
-
 import argparse
 import os
 import sys
@@ -46,6 +20,11 @@ from utils.general import (LOGGER, check_file, check_img_size, check_imshow, che
 from utils.plots import Annotator, colors, save_one_box
 from utils.torch_utils import select_device, time_sync
 
+#import autoSD
+from autoSD.optim import autoOptimizer, LossScaler
+from autoSD.nn import auto_insert
+from autoSD.utils import get_checkpoint, load_checkpoint, Scale_Backward
+from models.yolo import Model
 
 @torch.no_grad()
 def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
@@ -89,7 +68,22 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
 
     # Load model
     device = select_device(device)
-    model = DetectMultiBackend(weights, device=device, dnn=dnn, data=data)
+    model_train = Model("models/yolov5s.yaml", ch=3, nc=80, anchors=3).to(device)  # create
+    model_train = auto_insert(model_train, 
+                        act_quant_level=1,                               
+                        fp16_training=True, 
+                        keep_bn_fp32=True,
+                        act_forward_offset=12,
+                        act_forward_structure=[4,3], 
+                        act_forward_rounding='fp', 
+                        act_backward_offset=24, 
+                        act_backward_structure=[5,2], 
+                        act_backward_rounding='fp', 
+                        placement='inout', 
+                        exclude='no', 
+                        verbose=False,
+                        black_list=[])
+    model = DetectMultiBackend(weights, device=device, dnn=dnn, data=data, model_train = model_train)
     stride, names, pt, jit, onnx, engine = model.stride, model.names, model.pt, model.jit, model.onnx, model.engine
     imgsz = check_img_size(imgsz, s=stride)  # check image size
 
