@@ -277,7 +277,7 @@ class Concat(nn.Module):
 
 class DetectMultiBackend(nn.Module):
     # YOLOv5 MultiBackend class for python inference on various backends
-    def __init__(self, weights='yolov5s.pt', device=None, dnn=False, data=None, model_train=None):
+    def __init__(self, weights='yolov5s.pt', device=None, dnn=False, data=None, model_train=None,fuse=True):
         # Usage:
         #   PyTorch:              weights = *.pt
         #   TorchScript:                    *.torchscript
@@ -302,7 +302,7 @@ class DetectMultiBackend(nn.Module):
                 names = yaml.safe_load(f)['names']  # class names
 
         if pt:  # PyTorch
-            model = attempt_load(weights if isinstance(weights, list) else w, map_location=device,model_train=model_train)
+            model = attempt_load(weights if isinstance(weights, list) else w, map_location=device,model_train=model_train,fuse=False)
             stride = max(int(model.stride.max()), 32)  # model stride
             names = model.module.names if hasattr(model, 'module') else model.names  # get class names
             self.model = model  # explicitly assign for to(), cpu(), cuda(), half()
