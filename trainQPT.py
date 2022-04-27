@@ -13,8 +13,8 @@ from tqdm import tqdm
 from autoSD.optim import autoOptimizer, LossScaler
 from autoSD.nn import auto_insert
 from autoSD.utils import get_checkpoint, load_checkpoint, Scale_Backward, split_parameters, reconfigure_input
-from autoSD.post_train import Post_training_quantizer
 from autoSD.quant import quantizer
+from autoSD.post_train import Post_training_quantizer, collect_forward_mean, collect_forward_hist, forward_calibration_post, get_Quantizer
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # YOLOv5 root directory
@@ -108,6 +108,9 @@ def run(data,
         plots=True,
         callbacks=Callbacks(),
         compute_loss=None,
+        calibration=False,
+        bn_retune=False,
+        correct_bias=False
         ):
     # Initialize/load model and set device
     training = model is not None
@@ -156,16 +159,6 @@ def run(data,
                         verbose=False,
                         black_list=[])
 
-    param = split_parameters(model, quant_bias=False, black_list=[], split_bias=False)
-    ptq = Post_training_quantizer(param,
-                                  weight_rounding='floatsd4_ex',
-                                  weight_structure=[3,4],
-                                  weight_offset=None,
-                                  channel_wise=False,
-                                  verbose=False)
-    
-    reconfigure_input(model, rounding='fp', fp_structure=[4,3], fp_offset=12)
-    ptq.step(adaptive_structure=False, mode='anal')
     # Configure
     model.eval()
     is_coco = isinstance(data.get('val'), str) and data['val'].endswith('coco/val2017.txt')  # COCO dataset
@@ -191,6 +184,77 @@ def run(data,
     loss = torch.zeros(3, device=device)
     jdict, stats, ap, ap_class = [], [], [], []
     pbar = tqdm(dataloader, desc=s, bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')  # progress bar
+
+
+    if(correct_bias):
+        reconfigure_input(model, rounding='identity')
+        model.eval()
+        collect_forward_mean(model, phase='gt')
+        with torch.no_grad():
+            for batch_i, (im, targets, paths, shapes) in enumerate(pbar):
+              im = im.to(device, non_blocking=True)
+              im = im.half() if half else im.float()  # uint8 to fp16/32
+              im /= 255  # 0 - 255 to 0.0 - 1.0
+              output = model(im)
+        collect_forward_mean(model, phase='no')
+        reconfigure_input(model, rounding='fp')
+
+    param = split_parameters(model, quant_bias=False, black_list=[], split_bias=False, allquant=True)
+    ptq = Post_training_quantizer(param,
+                                  weight_rounding='floatsd4_ex',
+                                  weight_structure=[3,4],
+                                  weight_offset=None,
+                                  channel_wise=False,
+                                  verbose=False)
+    
+    reconfigure_input(model, rounding='fp', fp_structure=[4,3], fp_offset=12)
+    ptq.step(adaptive_structure=False, mode='anal')
+    possibility = np.unique(model.model.model[0].conv[1].weight.cpu().detach().numpy())
+    print("All {} possibility of conv1 weights:".format(len(possibility)))
+    print(possibility)
+
+
+
+    #perform forward calibration
+    if (calibration):
+      collect_forward_hist(model)
+      with torch.no_grad():
+        for batch_i, (im, targets, paths, shapes) in enumerate(pbar):
+              im = im.to(device, non_blocking=True)
+              im = im.half() if half else im.float()  # uint8 to fp16/32
+              im /= 255  # 0 - 255 to 0.0 - 1.0
+              output = model(im)
+      forward_calibration_post(model, verbose=False)
+
+    #correct bias
+    if(correct_bias):
+      model.eval()
+      #get all output Quantizer
+      target_list = get_Quantizer(model, level='output')
+      for module in target_list:
+          collect_forward_mean(module, phase='q')
+          #collect mean
+          with torch.no_grad():
+              for batch_i, (im, targets, paths, shapes) in enumerate(pbar):
+                im = im.to(device, non_blocking=True)
+                im = im.half() if half else im.float()  # uint8 to fp16/32
+                im /= 255  # 0 - 255 to 0.0 - 1.0
+                output = model(im)
+          #turn on bias correct
+          module.bias_correct()
+
+    #BN retune
+    if(bn_retune):
+      model.train()
+      with torch.no_grad():
+          for batch_i, (im, targets, paths, shapes) in enumerate(pbar):
+              im = im.to(device, non_blocking=True)
+              im = im.half() if half else im.float()  # uint8 to fp16/32
+              im /= 255  # 0 - 255 to 0.0 - 1.0
+              output = model(im)
+      model.eval()
+
+
     for batch_i, (im, targets, paths, shapes) in enumerate(pbar):
         t1 = time_sync()
         if pt or jit or engine:
@@ -352,6 +416,9 @@ def parse_opt():
     parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
     parser.add_argument('--half', action='store_true', help='use FP16 half-precision inference')
     parser.add_argument('--dnn', action='store_true', help='use OpenCV DNN for ONNX inference')
+    parser.add_argument('--calibration', action='store_true', help='run_calibration')
+    parser.add_argument('--bn_retune', action='store_true', help='BN retune')
+    parser.add_argument('--correct_bias', action='store_true', help='Correct bias')
     opt = parser.parse_args()
     opt.data = check_yaml(opt.data)  # check YAML
     opt.save_json |= opt.data.endswith('coco.yaml')

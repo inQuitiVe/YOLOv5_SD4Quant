@@ -34,7 +34,7 @@ def _in_blacklist(name, black_list):
 	return False
 
 #create param_groups for optimizer
-def split_parameters(model, quant_bias=False, black_list=[], split_bias=False):
+def split_parameters(model, quant_bias=False, black_list=[], split_bias=False, allquant=False):
 	#split model parameters to different groups
 	#Parameters:
 	#	model: model which parameters would be splitted
@@ -48,7 +48,9 @@ def split_parameters(model, quant_bias=False, black_list=[], split_bias=False):
 	quant_bn = []
 	for name, param in model.named_parameters():
 		if not param.requires_grad:
-			continue
+			if not allquant:
+				continue
+		print (name)
 		if (split_bias and (len(param.shape) == 1)):
 			param_bn.append(param)
 			if (not quant_bias):
