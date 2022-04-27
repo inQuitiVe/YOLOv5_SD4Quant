@@ -21,9 +21,7 @@ from tqdm import tqdm
 #import autoSD
 from autoSD.optim import autoOptimizer, LossScaler
 from autoSD.nn import auto_insert
-from autoSD.utils import get_checkpoint, load_checkpoint, Scale_Backward, split_parameters, reconfigure_input
-from autoSD.post_train import Post_training_quantizer
-from autoSD.quant import quantizer
+from autoSD.utils import get_checkpoint, load_checkpoint, Scale_Backward
 
 
 FILE = Path(__file__).resolve()
@@ -113,22 +111,8 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
     is_coco = isinstance(val_path, str) and val_path.endswith('coco/val2017.txt')  # COCO dataset
 
     # Model
-    check_suffix(weights, '.pt')  # check weights
-    pretrained = weights.endswith('.pt')
-    if pretrained:
-        with torch_distributed_zero_first(LOCAL_RANK):
-            weights = attempt_download(weights)  # download if not found locally
-        ckpt = torch.load(weights, map_location='cpu')  # load checkpoint to CPU to avoid CUDA memory leak
-        model = Model(cfg or ckpt['model'].yaml, ch=3, nc=nc, anchors=hyp.get('anchors')).to(device)  # create
-        exclude = ['anchor'] if (cfg or hyp.get('anchors')) and not resume else []  # exclude keys
-        csd = ckpt['model'].float().state_dict()  # checkpoint state_dict as FP32
-        csd = intersect_dicts(csd, model.state_dict(), exclude=exclude)  # intersect
-        model.load_state_dict(csd, strict=False)  # load
-        LOGGER.info(f'Transferred {len(csd)}/{len(model.state_dict())} items from {weights}')  # report
-    else:
-        model = Model(cfg, ch=3, nc=nc, anchors=hyp.get('anchors')).to(device)  # create
-        
-
+    # create model
+    model = Model(cfg, ch=3, nc=nc, anchors=hyp.get('anchors')).to(device)  # create
     model = auto_insert(model, 
                         act_quant_level=1,                               
                         fp16_training=True, 
@@ -143,17 +127,20 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
                         exclude='no', 
                         verbose=False,
                         black_list=[])
+    # load checkpoint
+    check_suffix(weights, '.pt')  # check weights
+    pretrained = weights.endswith('.pt')
+    if pretrained:
+        with torch_distributed_zero_first(LOCAL_RANK):
+            weights = attempt_download(weights)  # download if not found locally
+        ckpt = torch.load(weights, map_location=device)  # load checkpoint to CPU to avoid CUDA memory leak
+        exclude = ['anchor'] if (cfg or hyp.get('anchors')) and not resume else []  # exclude keys
+        csd = intersect_dicts(ckpt['model'], model.state_dict(), exclude=exclude)  # intersect
+        model.load_state_dict(csd, strict=False)  # load
+        LOGGER.info(f'Transferred {len(csd)}/{len(model.state_dict())} items from {weights}')  # report
+        
 
-    param = split_parameters(model, quant_bias=False, black_list=[], split_bias=False)
-    ptq = Post_training_quantizer(param,
-                                  weight_rounding='floatsd4_ex',
-                                  weight_structure=[3,4],
-                                  weight_offset=None,
-                                  channel_wise=False,
-                                  verbose=False)
-    
-    reconfigure_input(model, rounding='fp', fp_structure=[4,3], fp_offset=12)
-    ptq.step(adaptive_structure=False, mode='anal')
+
 
     # Freeze
     freeze = [f'model.{x}.' for x in (freeze if len(freeze) > 1 else range(freeze[0]))]  # layers to freeze
@@ -345,7 +332,6 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
                 f'Using {train_loader.num_workers * WORLD_SIZE} dataloader workers\n'
                 f"Logging results to {colorstr('bold', save_dir)}\n"
                 f'Starting training for {epochs} epochs...')
-
     for epoch in range(start_epoch, epochs):  # epoch ------------------------------------------------------------------
         model.train()
 

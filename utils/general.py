@@ -768,16 +768,17 @@ def non_max_suppression(prediction, conf_thres=0.25, iou_thres=0.45, classes=Non
     return output
 
 
-def strip_optimizer(f='best.pt', s='', model=[], ema=[]):  # from utils.general import *; strip_optimizer()
+def strip_optimizer(f='best.pt', s='', model=None, ema=None):  # from utils.general import *; strip_optimizer()
     # Strip optimizer from 'f' to finalize training, optionally save as 's'
     x = torch.load(f, map_location=torch.device('cpu'))
     model.load_state_dict(x['model'])
-    ema.load_state_dict(x['ema'])
     x['model'] = model
-    x['ema'] = ema
-    if x.get('ema'):
-        x['model'] = x['ema']
-        model = ema  # replace model with ema
+    if ema != None: 
+      ema.load_state_dict(x['ema'])
+      x['ema'] = ema
+      if x.get('ema'):
+          x['model'] = x['ema']
+          model = ema  # replace model with ema
     for k in 'optimizer', 'best_fitness', 'wandb_id', 'ema', 'updates':  # keys
         x[k] = None
     x['epoch'] = -1
