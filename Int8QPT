@@ -9,12 +9,12 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-#import autoSD
-from autoSD.optim import autoOptimizer, LossScaler
-from autoSD.nn import auto_insert
-from autoSD.utils import get_checkpoint, load_checkpoint, Scale_Backward, split_parameters, reconfigure_input
-from autoSD.quant import quantizer
-from autoSD.post_train import Post_training_quantizer, collect_forward_mean, collect_forward_hist, forward_calibration_post, get_Quantizer
+from torch.quantization import QuantStub, DeQuantStub
+# from utils import progress_bar
+from torch.autograd import Variable
+
+
+
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # YOLOv5 root directory
@@ -32,6 +32,16 @@ from utils.metrics import ConfusionMatrix, ap_per_class
 from utils.plots import output_to_target, plot_images, plot_val_study
 from utils.torch_utils import select_device, time_sync
 from models.yolo import Model
+
+from INT8_quantization.int_quantization import observer, mappings, fake_quantize
+
+int_act_fake_quant = fake_quantize.default_fake_quant
+log_weight_fake_quant_per_channel = fake_quantize.default_per_channel_log_weight_fake_quant
+log_weight_fake_quant_per_tensor  = fake_quantize.default_log_weight_fake_quant
+
+
+log4_per_channel_config = torch.quantization.QConfig(activation=int_act_fake_quant, weight=log_weight_fake_quant_per_channel)
+log4_per_tensor_config  = torch.quantization.QConfig(activation=int_act_fake_quant, weight=log_weight_fake_quant_per_tensor)
 
 
 def save_one_txt(predn, save_conf, shape, file):
@@ -144,20 +154,10 @@ def run(data,
         # Data
         data = check_dataset(data)  # check
 
-    model = auto_insert(model, 
-                        act_quant_level=1,                               
-                        fp16_training=True, 
-                        keep_bn_fp32=True,
-                        act_forward_offset=12,
-                        act_forward_structure=[4,3], 
-                        act_forward_rounding='fp', 
-                        act_backward_offset=24, 
-                        act_backward_structure=[5,2], 
-                        act_backward_rounding='fp', 
-                        placement='inout', 
-                        exclude='no', 
-                        verbose=False,
-                        black_list=[])
+    model.fuse_model()
+    model.qconfig = log4_per_channel_config
+    torch.quantization.prepare(model, inplace=True)
+    model.eval()
 
     # Configure
     model.eval()
@@ -186,77 +186,6 @@ def run(data,
     pbar = tqdm(dataloader, desc=s, bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')  # progress bar
 
 
-    if(correct_bias):
-        reconfigure_input(model, rounding='identity')
-        model.eval()
-        collect_forward_mean(model, phase='gt')
-        with torch.no_grad():
-            for batch_i, (im, targets, paths, shapes) in enumerate(pbar):
-              im = im.to(device, non_blocking=True)
-              im = im.half() if half else im.float()  # uint8 to fp16/32
-              im /= 255  # 0 - 255 to 0.0 - 1.0
-              output = model(im)
-        collect_forward_mean(model, phase='no')
-        reconfigure_input(model, rounding='fp')
-        print("finish prebias analyzing.....")
-
-    param = split_parameters(model, quant_bias=False, black_list=[], split_bias=False, allquant=True)
-    ptq = Post_training_quantizer(param,
-                                  weight_rounding='floatsd4_ex',
-                                  weight_structure=[3,4],
-                                  weight_offset=None,
-                                  channel_wise=False,
-                                  verbose=False)
-    
-    reconfigure_input(model, rounding='fp', fp_structure=[4,3], fp_offset=12)
-    ptq.step(adaptive_structure=False, mode='anal')
-    possibility = np.unique(model.model.model[0].conv[1].weight.cpu().detach().numpy())
-    print("All {} possibility of conv1 weights:".format(len(possibility)))
-    print(possibility)
-
-
-
-    #perform forward calibration
-    if (calibration):
-      collect_forward_hist(model)
-      with torch.no_grad():
-        for batch_i, (im, targets, paths, shapes) in enumerate(pbar):
-              im = im.to(device, non_blocking=True)
-              im = im.half() if half else im.float()  # uint8 to fp16/32
-              im /= 255  # 0 - 255 to 0.0 - 1.0
-              output = model(im)
-      forward_calibration_post(model, verbose=False)
-      print('finish calibration....')
-
-    #correct bias
-    if(correct_bias):
-      model.eval()
-      #get all output Quantizer
-      target_list = get_Quantizer(model, level='output')
-      for module in target_list:
-          collect_forward_mean(module, phase='q')
-          #collect mean
-          with torch.no_grad():
-              for batch_i, (im, targets, paths, shapes) in enumerate(pbar):
-                im = im.to(device, non_blocking=True)
-                im = im.half() if half else im.float()  # uint8 to fp16/32
-                im /= 255  # 0 - 255 to 0.0 - 1.0
-                output = model(im)
-          #turn on bias correct
-          module.bias_correct()
-      print("finish postbias analyzing...") 
-
-    #BN retune
-    if(bn_retune):
-      model.train()
-      with torch.no_grad():
-          for batch_i, (im, targets, paths, shapes) in enumerate(pbar):
-              im = im.to(device, non_blocking=True)
-              im = im.half() if half else im.float()  # uint8 to fp16/32
-              im /= 255  # 0 - 255 to 0.0 - 1.0
-              output = model(im)
-      model.eval()
-      print ("finish retune...")
 
 
     for batch_i, (im, targets, paths, shapes) in enumerate(pbar):

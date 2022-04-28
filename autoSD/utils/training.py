@@ -50,7 +50,6 @@ def split_parameters(model, quant_bias=False, black_list=[], split_bias=False, a
 		if not param.requires_grad:
 			if not allquant:
 				continue
-		print (name)
 		if (split_bias and (len(param.shape) == 1)):
 			param_bn.append(param)
 			if (not quant_bias):
