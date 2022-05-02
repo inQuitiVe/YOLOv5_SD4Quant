@@ -22,8 +22,9 @@ from tqdm import tqdm
 from autoSD.optim import autoOptimizer, LossScaler
 from autoSD.nn import auto_insert
 from autoSD.utils import get_checkpoint, load_checkpoint, Scale_Backward, split_parameters, reconfigure_input
-from autoSD.post_train import Post_training_quantizer
 from autoSD.quant import quantizer
+from autoSD.post_train import Post_training_quantizer, collect_forward_mean, collect_forward_hist, forward_calibration_post, get_Quantizer
+
 
 
 FILE = Path(__file__).resolve()
@@ -144,6 +145,16 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
                         verbose=False,
                         black_list=[])
 
+
+
+    # Freeze
+    freeze = [f'model.{x}.' for x in (freeze if len(freeze) > 1 else range(freeze[0]))]  # layers to freeze
+    for k, v in model.named_parameters():
+        v.requires_grad = True  # train all layers
+        if any(x in k for x in freeze):
+            LOGGER.info(f'freezing {k}')
+            v.requires_grad = False
+            
     param = split_parameters(model, quant_bias=False, black_list=[], split_bias=False)
     ptq = Post_training_quantizer(param,
                                   weight_rounding='floatsd4_ex',
@@ -154,15 +165,8 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
     
     reconfigure_input(model, rounding='fp', fp_structure=[4,3], fp_offset=12)
     ptq.step(adaptive_structure=False, mode='anal')
-
-    # Freeze
-    freeze = [f'model.{x}.' for x in (freeze if len(freeze) > 1 else range(freeze[0]))]  # layers to freeze
-    for k, v in model.named_parameters():
-        v.requires_grad = True  # train all layers
-        if any(x in k for x in freeze):
-            LOGGER.info(f'freezing {k}')
-            v.requires_grad = False
-
+    
+    
     # Image size
     gs = max(int(model.stride.max()), 32)  # grid size (max stride)
     imgsz = check_img_size(opt.imgsz, gs, floor=gs * 2)  # verify imgsz is gs-multiple
@@ -314,7 +318,32 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
             model.half().float()  # pre-reduce anchor precision
 
         callbacks.run('on_pretrain_routine_end')
-
+    
+    
+    
+    collect_forward_hist(model)
+    pbar2 = enumerate(val_loader)
+    pbar2 = tqdm(pbar2, total=nb, bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')
+    with torch.no_grad():
+      for batch_i, (im, targets, paths, shapes) in enumerate(pbar2):
+            im = im.to(device, non_blocking=True)
+            im = im.half() if half else im.float()  # uint8 to fp16/32
+            im /= 255  # 0 - 255 to 0.0 - 1.0
+            output = model(im)
+    forward_calibration_post(model, verbose=False)
+    print('finish calibration....')
+    
+    model.train()
+    with torch.no_grad():
+        for batch_i, (im, targets, paths, shapes) in enumerate(pbar2):
+            im = im.to(device, non_blocking=True)
+            im = im.half() if half else im.float()  # uint8 to fp16/32
+            im /= 255  # 0 - 255 to 0.0 - 1.0
+            output = model(im)
+    model.eval()
+    print ("finish retune...")
+    
+    
     # DDP mode
     if cuda and RANK != -1:
         model = DDP(model, device_ids=[LOCAL_RANK], output_device=LOCAL_RANK)
