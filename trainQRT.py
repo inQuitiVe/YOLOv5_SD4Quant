@@ -34,6 +34,7 @@ if str(ROOT) not in sys.path:
 ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
 import val  # for end-of-epoch mAP
+import trainQPT
 from models.experimental import attempt_load
 from models.yolo import Model
 from utils.autoanchor import check_anchors
@@ -155,16 +156,16 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
             LOGGER.info(f'freezing {k}')
             v.requires_grad = False
             
-    param = split_parameters(model, quant_bias=False, black_list=[], split_bias=False)
-    ptq = Post_training_quantizer(param,
-                                  weight_rounding='floatsd4_ex',
-                                  weight_structure=[3,4],
-                                  weight_offset=None,
-                                  channel_wise=False,
-                                  verbose=False)
+    # param = split_parameters(model, quant_bias=False, black_list=[], split_bias=False)
+    # ptq = Post_training_quantizer(param,
+    #                               weight_rounding='floatsd4_ex',
+    #                               weight_structure=[3,4],
+    #                               weight_offset=None,
+    #                               channel_wise=False,
+    #                               verbose=False)
     
-    reconfigure_input(model, rounding='fp', fp_structure=[4,3], fp_offset=12)
-    ptq.step(adaptive_structure=False, mode='anal')
+    # reconfigure_input(model, rounding='fp', fp_structure=[4,3], fp_offset=12)
+    # ptq.step(adaptive_structure=False, mode='anal')
     
     
     # Image size
@@ -320,28 +321,33 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
         callbacks.run('on_pretrain_routine_end')
     
     
+    # s = ('%20s' + '%11s' * 6) % ('Class', 'Images', 'Labels', 'P', 'R', 'mAP@.5', 'mAP@.5:.95')
+    # pbar2 = tqdm(val_loader, desc=s, bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')  # progress bar
+
+    # model.eval()
+    # collect_forward_hist(model)
+    # #pbar2 = enumerate(val_loader)
+    # #pbar2 = tqdm(val_loader, total=nb, bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')
+    # with torch.no_grad():
+    #   for batch_i, (im, targets, paths, shapes) in enumerate(pbar2):
+    #         im = im.to(device, non_blocking=True)
+    #         targets = targets.to(device)
+    #         im = im.half() if True else im.float()  # uint8 to fp16/32
+    #         im /= 255  # 0 - 255 to 0.0 - 1.0
+    #         output, train_out = model(im)
+    # forward_calibration_post(model, verbose=False)
+    # print('finish calibration....')
     
-    collect_forward_hist(model)
-    pbar2 = enumerate(val_loader)
-    pbar2 = tqdm(pbar2, total=nb, bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')
-    with torch.no_grad():
-      for batch_i, (im, targets, paths, shapes) in enumerate(pbar2):
-            im = im.to(device, non_blocking=True)
-            im = im.half() if half else im.float()  # uint8 to fp16/32
-            im /= 255  # 0 - 255 to 0.0 - 1.0
-            output = model(im)
-    forward_calibration_post(model, verbose=False)
-    print('finish calibration....')
-    
-    model.train()
-    with torch.no_grad():
-        for batch_i, (im, targets, paths, shapes) in enumerate(pbar2):
-            im = im.to(device, non_blocking=True)
-            im = im.half() if half else im.float()  # uint8 to fp16/32
-            im /= 255  # 0 - 255 to 0.0 - 1.0
-            output = model(im)
-    model.eval()
-    print ("finish retune...")
+    # model.train()
+    # with torch.no_grad():
+    #     for batch_i, (im, targets, paths, shapes) in enumerate(pbar2):
+    #         im = im.to(device, non_blocking=True)
+    #         im = im.half() if half else im.float()  # uint8 to fp16/32
+    #         im /= 255  # 0 - 255 to 0.0 - 1.0
+    #         output = model(im)
+    # model.eval()
+    # print ("finish retune...")
+
     
     
     # DDP mode
@@ -374,6 +380,19 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
                 f'Using {train_loader.num_workers * WORLD_SIZE} dataloader workers\n'
                 f"Logging results to {colorstr('bold', save_dir)}\n"
                 f'Starting training for {epochs} epochs...')
+
+    
+    results, maps, _ = trainQPT.run(data_dict,
+                          batch_size=batch_size, 
+                          imgsz=imgsz,
+                          model=model,
+                          single_cls=single_cls,
+                          dataloader=val_loader,
+                          save_dir=save_dir,
+                          plots=False,
+                          callbacks=callbacks,
+                          compute_loss=compute_loss,
+                          half=True)
 
     for epoch in range(start_epoch, epochs):  # epoch ------------------------------------------------------------------
         model.train()
