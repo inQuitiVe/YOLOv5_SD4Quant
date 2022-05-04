@@ -130,7 +130,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
     else:
         model = Model(cfg, ch=3, nc=nc, anchors=hyp.get('anchors')).to(device)  # create
         
-
+    
     model = auto_insert(model, 
                         act_quant_level=1,                               
                         fp16_training=True, 
@@ -145,7 +145,52 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
                         exclude='no', 
                         verbose=False,
                         black_list=[])
+    
 
+
+    param = split_parameters(model, quant_bias=False, black_list=[], split_bias=False, allquant=True)
+    ptq = Post_training_quantizer(param,
+                                  weight_rounding='floatsd4_ex',
+                                  weight_structure=[3,4],
+                                  weight_offset=None,
+                                  channel_wise=False,
+                                  verbose=False)
+    
+    reconfigure_input(model, rounding='fp', fp_structure=[4,3], fp_offset=12)
+    ptq.step(adaptive_structure=False, mode='anal')
+    possibility = np.unique(model.model[0].conv[1].weight.cpu().detach().numpy())
+    print("All {} possibility of conv1 weights:".format(len(possibility)))
+    print(possibility)
+    val.run(weights=weights, data=data)
+    trainQPT.run(weights=weights, data=data, bn_retune=True, calibration=True)
+
+    gs = max(int(model.stride.max()), 32)  # grid size (max stride)
+    imgsz = check_img_size(opt.imgsz, gs, floor=gs * 2)  # verify imgsz is gs-multiple
+    s = ('%20s' + '%11s' * 6) % ('Class', 'Images', 'Labels', 'P', 'R', 'mAP@.5', 'mAP@.5:.95')
+    val_loader = create_dataloader(val_path, imgsz, batch_size // WORLD_SIZE * 2, gs, single_cls,
+                                       hyp=hyp, cache=None if noval else opt.cache,
+                                       rect=True, rank=-1, workers=workers * 2, pad=0.5,
+                                       prefix=colorstr('val: '))[0]
+    pbar = tqdm(val_loader, desc=s, bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')  # progress bar
+    collect_forward_hist(model)
+    with torch.no_grad():
+      for batch_i, (im, targets, paths, shapes) in enumerate(pbar):
+            im = im.to(device, non_blocking=True)
+            im = im.half()
+            im /= 255  # 0 - 255 to 0.0 - 1.0
+            output = model(im)
+    forward_calibration_post(model, verbose=False)
+    print('finish calibration....')
+
+    model.train()
+    with torch.no_grad():
+        for batch_i, (im, targets, paths, shapes) in enumerate(pbar):
+            im = im.to(device, non_blocking=True)
+            im = im.half() 
+            im /= 255  # 0 - 255 to 0.0 - 1.0
+            output = model(im)
+    model.eval()
+    print ("finish retune...")
 
 
     # Freeze
@@ -156,17 +201,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
             LOGGER.info(f'freezing {k}')
             v.requires_grad = False
             
-    # param = split_parameters(model, quant_bias=False, black_list=[], split_bias=False)
-    # ptq = Post_training_quantizer(param,
-    #                               weight_rounding='floatsd4_ex',
-    #                               weight_structure=[3,4],
-    #                               weight_offset=None,
-    #                               channel_wise=False,
-    #                               verbose=False)
-    
-    # reconfigure_input(model, rounding='fp', fp_structure=[4,3], fp_offset=12)
-    # ptq.step(adaptive_structure=False, mode='anal')
-    
+
     
     # Image size
     gs = max(int(model.stride.max()), 32)  # grid size (max stride)
@@ -182,6 +217,8 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
     accumulate = max(round(nbs / batch_size), 1)  # accumulate loss before optimizing
     hyp['weight_decay'] *= batch_size * accumulate / nbs  # scale weight_decay
     LOGGER.info(f"Scaled weight_decay = {hyp['weight_decay']}")
+
+
 
     g0, g1, g2 = [], [], []  # optimizer parameter groups
     for v in model.modules():
@@ -321,33 +358,8 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
         callbacks.run('on_pretrain_routine_end')
     
     
-    # s = ('%20s' + '%11s' * 6) % ('Class', 'Images', 'Labels', 'P', 'R', 'mAP@.5', 'mAP@.5:.95')
-    # pbar2 = tqdm(val_loader, desc=s, bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')  # progress bar
-
-    # model.eval()
-    # collect_forward_hist(model)
-    # #pbar2 = enumerate(val_loader)
-    # #pbar2 = tqdm(val_loader, total=nb, bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')
-    # with torch.no_grad():
-    #   for batch_i, (im, targets, paths, shapes) in enumerate(pbar2):
-    #         im = im.to(device, non_blocking=True)
-    #         targets = targets.to(device)
-    #         im = im.half() if True else im.float()  # uint8 to fp16/32
-    #         im /= 255  # 0 - 255 to 0.0 - 1.0
-    #         output, train_out = model(im)
-    # forward_calibration_post(model, verbose=False)
-    # print('finish calibration....')
     
-    # model.train()
-    # with torch.no_grad():
-    #     for batch_i, (im, targets, paths, shapes) in enumerate(pbar2):
-    #         im = im.to(device, non_blocking=True)
-    #         im = im.half() if half else im.float()  # uint8 to fp16/32
-    #         im /= 255  # 0 - 255 to 0.0 - 1.0
-    #         output = model(im)
-    # model.eval()
-    # print ("finish retune...")
-
+    
     
     
     # DDP mode
@@ -381,18 +393,6 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
                 f"Logging results to {colorstr('bold', save_dir)}\n"
                 f'Starting training for {epochs} epochs...')
 
-    
-    results, maps, _ = trainQPT.run(data_dict,
-                          batch_size=batch_size, 
-                          imgsz=imgsz,
-                          model=model,
-                          single_cls=single_cls,
-                          dataloader=val_loader,
-                          save_dir=save_dir,
-                          plots=False,
-                          callbacks=callbacks,
-                          compute_loss=compute_loss,
-                          half=True)
 
     for epoch in range(start_epoch, epochs):  # epoch ------------------------------------------------------------------
         model.train()

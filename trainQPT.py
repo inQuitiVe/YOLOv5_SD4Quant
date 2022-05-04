@@ -257,6 +257,7 @@ def run(data,
               output = model(im)
       model.eval()
       print ("finish retune...")
+      model_cpy = model
 
 
     for batch_i, (im, targets, paths, shapes) in enumerate(pbar):
@@ -394,7 +395,7 @@ def run(data,
     maps = np.zeros(nc) + map
     for i, c in enumerate(ap_class):
         maps[c] = ap[i]
-    return (mp, mr, map50, map, *(loss.cpu() / len(dataloader)).tolist()), maps, t
+    return model_cpy
 
 
 def parse_opt():
