@@ -31,6 +31,9 @@ def _in_blacklist(name, black_list):
 		if (w_name == name):
 			print('Note: {} are not quantized'.format(name))
 			return True
+		elif (l_name == name.split(".")[2]):
+			print('Note: {} are not quantized2'.format(name))
+			return True
 	return False
 
 #create param_groups for optimizer
@@ -40,6 +43,7 @@ def split_parameters(model, quant_bias=False, black_list=[], split_bias=False, a
 	#	model: model which parameters would be splitted
 	#   quant_bias: whether to quantize bias or batchnorm weight/bias
 	#   black_list: List of param name, param in black list would not be quant
+	print("\n")
 	param_quant = []
 	param_no_quant = []
 	quant_quant = []

@@ -110,7 +110,8 @@ def run(data,
         compute_loss=None,
         calibration=False,
         bn_retune=False,
-        correct_bias=False
+        correct_bias=False,
+        black_list=[]
         ):
     # Initialize/load model and set device
     training = model is not None
@@ -157,7 +158,7 @@ def run(data,
                         placement='inout', 
                         exclude='no', 
                         verbose=False,
-                        black_list=[])
+                        black_list=black_list)
 
     # Configure
     model.eval()
@@ -185,7 +186,7 @@ def run(data,
     jdict, stats, ap, ap_class = [], [], [], []
     pbar = tqdm(dataloader, desc=s, bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')  # progress bar
 
-
+    print(black_list)
     if(correct_bias):
         reconfigure_input(model, rounding='identity')
         model.eval()
@@ -200,7 +201,7 @@ def run(data,
         reconfigure_input(model, rounding='fp')
         print("finish prebias analyzing.....")
 
-    param = split_parameters(model, quant_bias=False, black_list=[], split_bias=False, allquant=True)
+    param = split_parameters(model, quant_bias=False, black_list=black_list, split_bias=False, allquant=True)
     ptq = Post_training_quantizer(param,
                                   weight_rounding='floatsd4_ex',
                                   weight_structure=[3,4],
@@ -424,6 +425,7 @@ def parse_opt():
     parser.add_argument('--calibration', action='store_true', help='run_calibration')
     parser.add_argument('--bn_retune', action='store_true', help='BN retune')
     parser.add_argument('--correct_bias', action='store_true', help='Correct bias')
+    parser.add_argument('--black_list', type=str, nargs='+', default=[], help='Blacklist')
     opt = parser.parse_args()
     opt.data = check_yaml(opt.data)  # check YAML
     opt.save_json |= opt.data.endswith('coco.yaml')
