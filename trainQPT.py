@@ -215,6 +215,29 @@ def run(data,
     print("All {} possibility of conv1 weights:".format(len(possibility)))
     print(possibility)
 
+    count = 0
+    with open ("resultv5s.txt","w+") as s:
+      for name, param in model.named_parameters():
+        if (name.split(".")[-1] == "weight" and name.split(".")[-2]!="bn"):
+          print ("param numbers",param.numel(), file=s)
+          print (name, file=s)
+          possibility = np.unique(param.cpu().detach().numpy())
+          print("All {} possibility of conv1 weights:".format(len(possibility)), "\n", file=s)
+          print(possibility, "\n", file=s)
+          if (len(possibility)<=16):
+            count += 4*param.numel()
+          else: count += 16*param.numel()
+          
+      print ("###############################################################################", file=s)
+      for name, param in model.named_parameters():
+        if (name.split(".")[-1] == "weight" and name.split(".")[-2]=="bn"):
+          print (param.numel())
+          print (name, file=s)
+          possibility = np.unique(param.cpu().detach().numpy())
+          print("All {} possibility of conv1 weights:".format(len(possibility)), "\n", file=s)
+          print(possibility, "\n", file=s)
+          count += 16*param.numel()
+      print("total parameter count: ",count, file=s)
 
 
     #perform forward calibration
@@ -259,6 +282,7 @@ def run(data,
       model.eval()
       print ("finish retune...")
       model_cpy = model
+
 
 
     for batch_i, (im, targets, paths, shapes) in enumerate(pbar):
