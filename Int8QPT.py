@@ -153,10 +153,16 @@ def run(data,
 
         # Data
         data = check_dataset(data)  # check
-
+    
+    model.eval()
     model.qconfig = log4_per_channel_config
     torch.quantization.prepare(model, inplace=True)
     model.eval()
+
+    device = 'cpu'
+    model = model.to(device)
+    torch.quantization.convert(model, mapping= mappings.LOG_MODULE_MAPPING, inplace=True)
+
 
     # Configure
     model.eval()
@@ -322,6 +328,33 @@ def run(data,
     maps = np.zeros(nc) + map
     for i, c in enumerate(ap_class):
         maps[c] = ap[i]
+    
+
+    count = 0
+    with open ("after.txt","w+") as s:
+      for name, param in model.state_dict().items():
+        print(name)
+        if (name.split(".")[-1] == "weight"):
+          print ("param numbers",param.numel(), file=s)
+          print (name, file=s)
+          possibility = np.unique(param.int_repr().detach().numpy())
+          print("All {} possibility of conv1 weights:".format(len(possibility)), "\n", file=s)
+          print(possibility, "\n", file=s)
+          if (len(possibility)<=16):
+            count += 4*param.numel()
+          else: count += 16*param.numel()
+          
+      print ("###############################################################################", file=s)
+      for name, param in model.named_parameters():
+        if (name.split(".")[-1] != "weight"):
+          print ("param numbers",param.numel(), file=s)
+          print (name, file=s)
+          possibility = np.unique(param.cpu().detach().numpy())
+          print("All {} possibility of conv1 weights:".format(len(possibility)), "\n", file=s)
+          print(possibility, "\n", file=s)
+          count += 16*param.numel()
+      print("total parameter count: ",count, file=s)
+
     return (mp, mr, map50, map, *(loss.cpu() / len(dataloader)).tolist()), maps, t
 
 
