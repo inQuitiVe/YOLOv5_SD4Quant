@@ -107,12 +107,16 @@ class FakeQuantize(Module):
 
         if self.fake_quant_enabled[0] == 1:
             if (self.log_scale):
+                X = X.float()
                 # X = Log_Preprocess_gpu(X, self.scale)
                 X = Log_Preprocess_cpu(X, self.scale)
+                X = X.half()
 
             if self.qscheme == torch.per_channel_symmetric or self.qscheme == torch.per_channel_affine:
+                X = X.float()
                 X = torch.fake_quantize_per_channel_affine(X, self.scale, self.zero_point,
                                                            self.ch_axis, self.quant_min, self.quant_max)
+                X = X.half()
             else:
                 X = X.float()
                 X = torch.fake_quantize_per_tensor_affine(X, float(self.scale),

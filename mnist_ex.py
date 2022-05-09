@@ -120,14 +120,14 @@ def train(args, model, device, train_loader, optimizer, epoch):
                 break
 
 
-def test(model, device, test_loader):
+def test(model, device, test_loader, half=False):
     model.eval()
     test_loss = 0
     correct = 0
     with torch.no_grad():
         for data, target in test_loader:
             data, target = data.to(device), target.to(device)
-            output = model(data)
+            output = model(data.half()) if half else model(data)
             test_loss += F.nll_loss(output, target, reduction='sum').item()  # sum up batch loss
             pred = output.argmax(dim=1, keepdim=True)  # get the index of the max log-probability
             correct += pred.eq(target.view_as(pred)).sum().item()
@@ -221,7 +221,7 @@ def main():
     model.qconfig = log4_per_channel_config
     torch.quantization.prepare(model, inplace=True)
     model.eval()
-    test_accuracy = test(model, device, test_loader)
+    test_accuracy = test(model.half(), device, test_loader, half=True)
     # torch.quantization.convert(model, mapping= mappings.LOG_MODULE_MAPPING, inplace=True)
 
     print("FloatSD4 accuracy after post quant = ", test_accuracy/100)
@@ -231,7 +231,7 @@ def main():
     torch.quantization.prepare_qat(model, inplace=True)
 
     for epoch in range(1, args.retrain_epochs + 1):
-        train(args, model, device, train_loader, optimizer, epoch)
+        train(args, model.half(), device, train_loader, optimizer, epoch)
 
         model.apply(fake_quantize.disable_observer)
         test(model, device, test_loader)
