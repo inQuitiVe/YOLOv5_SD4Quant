@@ -33,7 +33,7 @@ from utils.plots import output_to_target, plot_images, plot_val_study
 from utils.torch_utils import select_device, time_sync
 from models.yolo import Model
 
-from int8.int_quantization import observer, mappings, fake_quantize
+from int_quantization import observer, mappings, fake_quantize
 
 int_act_fake_quant = fake_quantize.default_fake_quant
 log_weight_fake_quant_per_channel = fake_quantize.default_per_channel_log_weight_fake_quant
@@ -154,7 +154,6 @@ def run(data,
         # Data
         data = check_dataset(data)  # check
 
-    model.fuse_model()
     model.qconfig = log4_per_channel_config
     torch.quantization.prepare(model, inplace=True)
     model.eval()

@@ -114,9 +114,11 @@ class FakeQuantize(Module):
                 X = torch.fake_quantize_per_channel_affine(X, self.scale, self.zero_point,
                                                            self.ch_axis, self.quant_min, self.quant_max)
             else:
+                X = X.float()
                 X = torch.fake_quantize_per_tensor_affine(X, float(self.scale),
                                                           int(self.zero_point), self.quant_min,
                                                           self.quant_max)
+                X = X.half()
         return X
 
     with_args = classmethod(_with_args)
