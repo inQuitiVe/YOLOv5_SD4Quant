@@ -1,3 +1,23 @@
+# YOLOv5 🚀 by Ultralytics, GPL-3.0 license
+"""
+Validate a trained YOLOv5 model accuracy on a custom dataset
+
+Usage:
+    $ python path/to/val.py --weights yolov5s.pt --data coco128.yaml --img 640
+
+Usage - formats:
+    $ python path/to/val.py --weights yolov5s.pt                 # PyTorch
+                                      yolov5s.torchscript        # TorchScript
+                                      yolov5s.onnx               # ONNX Runtime or OpenCV DNN with --dnn
+                                      yolov5s.xml                # OpenVINO
+                                      yolov5s.engine             # TensorRT
+                                      yolov5s.mlmodel            # CoreML (MacOS-only)
+                                      yolov5s_saved_model        # TensorFlow SavedModel
+                                      yolov5s.pb                 # TensorFlow GraphDef
+                                      yolov5s.tflite             # TensorFlow Lite
+                                      yolov5s_edgetpu.tflite     # TensorFlow Edge TPU
+"""
+
 import argparse
 import json
 import os
@@ -24,7 +44,7 @@ ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
 from models.common import DetectMultiBackend
 from utils.callbacks import Callbacks
-from utils.datasets import *
+from utils.datasets import create_dataloader
 from utils.general import (LOGGER, box_iou, check_dataset, check_img_size, check_requirements, check_yaml,
                            coco80_to_coco91_class, colorstr, increment_path, non_max_suppression, print_args,
                            scale_coords, xywh2xyxy, xyxy2xywh)
@@ -108,12 +128,10 @@ def run(data,
         plots=True,
         callbacks=Callbacks(),
         compute_loss=None,
-        calibration=False,
-        bn_retune=False,
-        correct_bias=False,
-        black_list=[]
+        cfg = "",
         ):
     # Initialize/load model and set device
+
     training = model is not None
     if training:  # called by train.py
         device, pt, jit, engine = next(model.parameters()).device, True, False, False  # get model device, PyTorch model
@@ -126,40 +144,35 @@ def run(data,
         # Directories
         save_dir = increment_path(Path(project) / name, exist_ok=exist_ok)  # increment run
         (save_dir / 'labels' if save_txt else save_dir).mkdir(parents=True, exist_ok=True)  # make dir
-        
+
+        model = DetectMultiBackend(cfg, device=device, dnn=dnn, data=data, fuse = False)
+
         # Load model
-        model = DetectMultiBackend(weights, device=device, dnn=dnn, data=data, fuse=False)
-        # model = DetectMultiBackend(weights, device=device, dnn=dnn, data=data)
+        # Model        
+        ckpt = torch.load(weights[0], map_location=device)  # load checkpoint to CPU to avoid CUDA memory leak
+        model = auto_insert(model, 
+                            act_quant_level=1,                               
+                            fp16_training=True, 
+                            keep_bn_fp32=True,
+                            act_forward_offset=12,
+                            act_forward_structure=[4,3], 
+                            act_forward_rounding='fp', 
+                            act_backward_offset=24, 
+                            act_backward_structure=[5,2], 
+                            act_backward_rounding='fp', 
+                            placement='inout', 
+                            exclude='no', 
+                            verbose=False,
+                            black_list=ckpt['black_list'])
+
+        model.load_state_dict(ckpt['model'], strict=False)  # load
         stride, pt, jit, onnx, engine = model.stride, model.pt, model.jit, model.onnx, model.engine
         imgsz = check_img_size(imgsz, s=stride)  # check image size
         half &= (pt or jit or onnx or engine) and device.type != 'cpu'  # FP16 supported on limited backends with CUDA
-        if pt or jit:
-            model.model.half() if half else model.model.float()
-        elif engine:
-            batch_size = model.batch_size
-        else:
-            half = False
-            batch_size = 1  # export.py models default to batch-size 1
-            device = torch.device('cpu')
-            LOGGER.info(f'Forcing --batch-size 1 square inference shape(1,3,{imgsz},{imgsz}) for non-PyTorch backends')
+        model.model.half() if half else model.model.float()
 
         # Data
         data = check_dataset(data)  # check
-
-    model = auto_insert(model, 
-                        act_quant_level=1,                               
-                        fp16_training=True, 
-                        keep_bn_fp32=True,
-                        act_forward_offset=12,
-                        act_forward_structure=[4,3], 
-                        act_forward_rounding='fp', 
-                        act_backward_offset=24, 
-                        act_backward_structure=[5,2], 
-                        act_backward_rounding='fp', 
-                        placement='inout', 
-                        exclude='no', 
-                        verbose=False,
-                        black_list=black_list)
 
     # Configure
     model.eval()
@@ -167,20 +180,15 @@ def run(data,
     nc = 1 if single_cls else int(data['nc'])  # number of classes
     iouv = torch.linspace(0.5, 0.95, 10).to(device)  # iou vector for mAP@0.5:0.95
     niou = iouv.numel()
-    print(data)
+
     # Dataloader
     if not training:
-        model.warmup(imgsz=(1 if pt else batch_size, 3, imgsz, imgsz), half=half)  # warmup
+        # model.warmup(imgsz=(1 if pt else batch_size, 3, imgsz, imgsz), half=half)  # warmup
         pad = 0.0 if task in ('speed', 'benchmark') else 0.5
         rect = False if task == 'benchmark' else pt  # square inference for benchmarks
         task = task if task in ('train', 'val', 'test') else 'val'  # path to train/val/test images
-        # autosplit("/content/datasets/coco/images", weights=(0.5, 0.5, 0.0)) 
-        # dataloader = create_dataloader("/content/datasets/coco/autosplit_train.txt", imgsz, batch_size, stride, single_cls, pad=pad, rect=rect,
-                                      #  workers=workers, prefix=colorstr(f'{task}: '))[0]
-        # dataloaderpre = create_dataloader("/content/datasets/coco/autosplit_val.txt", imgsz, batch_size, stride, single_cls, pad=pad, rect=rect,
-                                      #  workers=workers, prefix=colorstr(f'{task}: '))[0]
         dataloader = create_dataloader(data[task], imgsz, batch_size, stride, single_cls, pad=pad, rect=rect,
-                               workers=workers, prefix=colorstr(f'{task}: '))[0]
+                                       workers=workers, prefix=colorstr(f'{task}: '))[0]
 
     seen = 0
     confusion_matrix = ConfusionMatrix(nc=nc)
@@ -191,90 +199,6 @@ def run(data,
     loss = torch.zeros(3, device=device)
     jdict, stats, ap, ap_class = [], [], [], []
     pbar = tqdm(dataloader, desc=s, bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')  # progress bar
-    # pbarpre = tqdm(dataloaderpre, desc=s, bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')  # progress bar
-    pbarpre = pbar
-    print(black_list)
-
-
-    param = split_parameters(model, quant_bias=False, black_list=black_list, split_bias=False, allquant=True)
-    ptq = Post_training_quantizer(param,
-                                  weight_rounding='floatsd4_ex',
-                                  weight_structure=[3,4],
-                                  weight_offset=None,
-                                  channel_wise=False,
-                                  verbose=False)
-    
-    reconfigure_input(model, rounding='fp', fp_structure=[4,3], fp_offset=12)
-    ptq.step(adaptive_structure=False, mode='anal')
-    possibility = np.unique(model.model.model[0].conv[1].weight.cpu().detach().numpy())
-    print("All {} possibility of conv1 weights:".format(len(possibility)))
-    print(possibility)
-
-    count = 0
-    with open ("resultv5s.txt","w+") as s:
-      for name, param in model.named_parameters():
-        if (name.split(".")[-1] == "weight" and name.split(".")[-2]!="bn"):
-          print ("param numbers",param.numel(), file=s)
-          print (name, file=s)
-          possibility = np.unique(param.cpu().detach().numpy())
-          print("All {} possibility of conv1 weights:".format(len(possibility)), "\n", file=s)
-          print(possibility, "\n", file=s)
-          if (len(possibility)<=16):
-            count += 4*param.numel()
-          else: count += 16*param.numel()
-          
-      print ("###############################################################################", file=s)
-      for name, param in model.named_parameters():
-        if (name.split(".")[-1] == "weight" and name.split(".")[-2]=="bn"):
-          print ("param numbers",param.numel(), file=s)
-          print (name, file=s)
-          possibility = np.unique(param.cpu().detach().numpy())
-          print("All {} possibility of conv1 weights:".format(len(possibility)), "\n", file=s)
-          print(possibility, "\n", file=s)
-          count += 16*param.numel()
-      print("total parameter count: ",count, file=s)
-
-
-    #perform forward calibration
-    if (calibration):
-      collect_forward_hist(model)
-      with torch.no_grad():
-        for batch_i, (im, targets, paths, shapes) in enumerate(pbarpre):
-              im = im.to(device, non_blocking=True)
-              im = im.half() if half else im.float()  # uint8 to fp16/32
-              im /= 255  # 0 - 255 to 0.0 - 1.0
-              output = model(im)
-      forward_calibration_post(model, verbose=False)
-      print('finish calibration....')
-
-    #BN retune
-    if(bn_retune):
-      model.train()
-      with torch.no_grad():
-          for batch_i, (im, targets, paths, shapes) in enumerate(pbarpre):
-              im = im.to(device, non_blocking=True)
-              im = im.half() if half else im.float()  # uint8 to fp16/32
-              im /= 255  # 0 - 255 to 0.0 - 1.0
-              output = model(im)
-      model.eval()
-      print ("finish retune...")
-
-    ckpt = {'epoch': 0,
-            'best_fitness': None,
-            'model': model.state_dict(),                 # model.state_dict()為淺拷貝，deepcopy()為深拷貝，model.load_state_dict() 是深拷貝
-            'ema': None,
-            'updates': None,
-            'optimizer': None,                       # state_dict()僅保存和加載模型參數(需先構建好model再.load_dict))
-            'wandb_id': None,
-            'date': None,
-            'black_list': black_list}
-
-    # Save last, best and delete
-    torch.save(ckpt, f'{weights[0][:-3]}Q.pt')
-
-    print ("\nsaving to ", f'{weights[0][:-3]}Q.pt')
-
-
     for batch_i, (im, targets, paths, shapes) in enumerate(pbar):
         t1 = time_sync()
         if pt or jit or engine:
@@ -410,7 +334,6 @@ def run(data,
     maps = np.zeros(nc) + map
     for i, c in enumerate(ap_class):
         maps[c] = ap[i]
-
     return (mp, mr, map50, map, *(loss.cpu() / len(dataloader)).tolist()), maps, t
 
 
@@ -437,10 +360,7 @@ def parse_opt():
     parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
     parser.add_argument('--half', action='store_true', help='use FP16 half-precision inference')
     parser.add_argument('--dnn', action='store_true', help='use OpenCV DNN for ONNX inference')
-    parser.add_argument('--calibration', action='store_true', help='run_calibration')
-    parser.add_argument('--bn_retune', action='store_true', help='BN retune')
-    parser.add_argument('--correct_bias', action='store_true', help='Correct bias')
-    parser.add_argument('--black_list', type=str, nargs='+', default=[], help='Blacklist')
+    parser.add_argument('--cfg', type=str, default='', help='model.yaml path')
     opt = parser.parse_args()
     opt.data = check_yaml(opt.data)  # check YAML
     opt.save_json |= opt.data.endswith('coco.yaml')
