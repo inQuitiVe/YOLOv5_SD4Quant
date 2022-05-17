@@ -24,7 +24,7 @@ ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
 from models.common import DetectMultiBackend
 from utils.callbacks import Callbacks
-from utils.datasets import create_dataloader
+from utils.datasets import *
 from utils.general import (LOGGER, box_iou, check_dataset, check_img_size, check_requirements, check_yaml,
                            coco80_to_coco91_class, colorstr, increment_path, non_max_suppression, print_args,
                            scale_coords, xywh2xyxy, xyxy2xywh)
@@ -128,7 +128,8 @@ def run(data,
         (save_dir / 'labels' if save_txt else save_dir).mkdir(parents=True, exist_ok=True)  # make dir
 
         # Load model
-        model = DetectMultiBackend(weights, device=device, dnn=dnn, data=data)
+        model = DetectMultiBackend(weights, device=device, dnn=dnn, data=data, fuse=False)
+        # model = DetectMultiBackend(weights, device=device, dnn=dnn, data=data)
         stride, pt, jit, onnx, engine = model.stride, model.pt, model.jit, model.onnx, model.engine
         imgsz = check_img_size(imgsz, s=stride)  # check image size
         half &= (pt or jit or onnx or engine) and device.type != 'cpu'  # FP16 supported on limited backends with CUDA
@@ -166,14 +167,17 @@ def run(data,
     nc = 1 if single_cls else int(data['nc'])  # number of classes
     iouv = torch.linspace(0.5, 0.95, 10).to(device)  # iou vector for mAP@0.5:0.95
     niou = iouv.numel()
-
+    print(data)
     # Dataloader
     if not training:
         model.warmup(imgsz=(1 if pt else batch_size, 3, imgsz, imgsz), half=half)  # warmup
         pad = 0.0 if task in ('speed', 'benchmark') else 0.5
         rect = False if task == 'benchmark' else pt  # square inference for benchmarks
         task = task if task in ('train', 'val', 'test') else 'val'  # path to train/val/test images
-        dataloader = create_dataloader(data[task], imgsz, batch_size, stride, single_cls, pad=pad, rect=rect,
+        autosplit("/content/datasets/coco/images", weights=(0.5, 0.5, 0.0)) 
+        dataloader = create_dataloader("/content/datasets/coco/autosplit_train.txt", imgsz, batch_size, stride, single_cls, pad=pad, rect=rect,
+                                       workers=workers, prefix=colorstr(f'{task}: '))[0]
+        dataloaderpre = create_dataloader("/content/datasets/coco/autosplit_val.txt", imgsz, batch_size, stride, single_cls, pad=pad, rect=rect,
                                        workers=workers, prefix=colorstr(f'{task}: '))[0]
 
     seen = 0
@@ -185,21 +189,10 @@ def run(data,
     loss = torch.zeros(3, device=device)
     jdict, stats, ap, ap_class = [], [], [], []
     pbar = tqdm(dataloader, desc=s, bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')  # progress bar
-
+    # pbarpre = tqdm(dataloaderpre, desc=s, bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')  # progress bar
+    pbarpre = pbar
     print(black_list)
-    if(correct_bias):
-        reconfigure_input(model, rounding='identity')
-        model.eval()
-        collect_forward_mean(model, phase='gt')
-        with torch.no_grad():
-            for batch_i, (im, targets, paths, shapes) in enumerate(pbar):
-              im = im.to(device, non_blocking=True)
-              im = im.half() if half else im.float()  # uint8 to fp16/32
-              im /= 255  # 0 - 255 to 0.0 - 1.0
-              output = model(im)
-        collect_forward_mean(model, phase='no')
-        reconfigure_input(model, rounding='fp')
-        print("finish prebias analyzing.....")
+
 
     param = split_parameters(model, quant_bias=False, black_list=black_list, split_bias=False, allquant=True)
     ptq = Post_training_quantizer(param,
@@ -231,7 +224,7 @@ def run(data,
       print ("###############################################################################", file=s)
       for name, param in model.named_parameters():
         if (name.split(".")[-1] == "weight" and name.split(".")[-2]=="bn"):
-          print (param.numel())
+          print ("param numbers",param.numel(), file=s)
           print (name, file=s)
           possibility = np.unique(param.cpu().detach().numpy())
           print("All {} possibility of conv1 weights:".format(len(possibility)), "\n", file=s)
@@ -244,7 +237,7 @@ def run(data,
     if (calibration):
       collect_forward_hist(model)
       with torch.no_grad():
-        for batch_i, (im, targets, paths, shapes) in enumerate(pbar):
+        for batch_i, (im, targets, paths, shapes) in enumerate(pbarpre):
               im = im.to(device, non_blocking=True)
               im = im.half() if half else im.float()  # uint8 to fp16/32
               im /= 255  # 0 - 255 to 0.0 - 1.0
@@ -252,29 +245,11 @@ def run(data,
       forward_calibration_post(model, verbose=False)
       print('finish calibration....')
 
-    #correct bias
-    if(correct_bias):
-      model.eval()
-      #get all output Quantizer
-      target_list = get_Quantizer(model, level='output')
-      for module in target_list:
-          collect_forward_mean(module, phase='q')
-          #collect mean
-          with torch.no_grad():
-              for batch_i, (im, targets, paths, shapes) in enumerate(pbar):
-                im = im.to(device, non_blocking=True)
-                im = im.half() if half else im.float()  # uint8 to fp16/32
-                im /= 255  # 0 - 255 to 0.0 - 1.0
-                output = model(im)
-          #turn on bias correct
-          module.bias_correct()
-      print("finish postbias analyzing...") 
-
     #BN retune
     if(bn_retune):
       model.train()
       with torch.no_grad():
-          for batch_i, (im, targets, paths, shapes) in enumerate(pbar):
+          for batch_i, (im, targets, paths, shapes) in enumerate(pbarpre):
               im = im.to(device, non_blocking=True)
               im = im.half() if half else im.float()  # uint8 to fp16/32
               im /= 255  # 0 - 255 to 0.0 - 1.0
