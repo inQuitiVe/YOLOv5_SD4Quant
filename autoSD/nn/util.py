@@ -50,7 +50,7 @@ def _should_quant(num, patch_num, placement, exclude, chain, name, black_list,
 	q = True
 	insert_mode = 'inout'
 
-	ex_flag = (name in black_list)
+	ex_flag = (name in black_list or name.split(".")[2] in black_list or name.split(".")[1] in black_list)
 
 	if ((patch_num == 1) and (exclude in ['input', 'inout'])): #input quant exclude
 		q = False
